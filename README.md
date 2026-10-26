@@ -14,11 +14,11 @@ operation. TimeTree synchronization is optional, disabled by default, and never 
 successful until the created memo has been read back and verified.
 
 > **Project status:** local storage, validation, reports, MCP transport, mock-provider
-> synchronization, reconciliation, and failure recovery are covered by automated tests. **Read-only
-> live access** (sign-in/session, calendar and memo listing) has been verified against an authorized
-> account. **Live publication has not been exercised** — do not claim that live writes work until the
-> gated write-test procedure in
-> [docs/LIVE_TIMETREE_VERIFICATION.md](docs/LIVE_TIMETREE_VERIFICATION.md) has been completed.
+> synchronization, reconciliation, and failure recovery are covered by automated tests. **Live
+> TimeTree integration — including publication — has been verified end-to-end** against an
+> authorized account using the gated write-test in
+> [docs/LIVE_TIMETREE_VERIFICATION.md](docs/LIVE_TIMETREE_VERIFICATION.md). The community endpoints
+> are unofficial and can change; re-verify after upstream changes.
 
 ---
 
@@ -579,6 +579,22 @@ cookie, CSRF token, or note contents. Add `-- --include-memos` and set
 `TIMETREE_CALENDAR_ID` to also count memos in that one calendar. The full authorization, write-test,
 and cleanup procedure is in
 [docs/LIVE_TIMETREE_VERIFICATION.md](docs/LIVE_TIMETREE_VERIFICATION.md).
+
+### Gated live write test
+
+Live **publication** is verified by a separate, explicitly gated script. It creates exactly one
+clearly-labeled synthetic memo, verifies it by reading it back, confirms re-publication is
+idempotent (no duplicate), and prints only summaries. It is not part of `npm test` and never runs
+without opt-in:
+
+```bash
+TIMETREE_LIVE_WRITE=1 \
+TIMETREE_SESSION_COOKIE="<session-value>" \
+npx tsx tests/live/write-test.ts
+```
+
+There is no delete tool, so the single test memo must be removed manually in the TimeTree app
+afterward. Do not point this at a shared, family, team, or production calendar.
 
 ## Known limitations
 

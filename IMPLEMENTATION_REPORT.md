@@ -158,15 +158,27 @@ branches.
 
 ### Live status
 
-Read-only live access has been verified against an authorized account using session-cookie
-authentication (`TIMETREE_SESSION_COOKIE`). The opt-in smoke script authenticated, listed calendars,
-and listed memos for the configured calendar, with no memo created, updated, or deleted. This
-confirms the community adapter can reach a real account for reads.
+Live TimeTree integration, **including publication**, has been verified end-to-end against an
+authorized account using the gated write-test (`tests/live/write-test.ts`) with session-cookie
+authentication. The verified sequence:
 
-**Live remote publication has not been exercised.** No `create_memo` write was performed against a
-real account, so the create-and-verify path remains validated only by the mock provider and the
-fake-`fetch` adapter tests. Do not describe live publication as working until the gated write-test in
-the live-verification procedure has been completed against a dedicated private test calendar.
+- read-only auth, calendar listing, and memo listing succeeded;
+- one synthetic memo was created via the real `publish_worklog` path with a matching preview hash
+  and `PUBLISH` confirmation;
+- the create was **read back and verified** (`state=PUBLISHED`, `verified=true`, with a memo ID and
+  verification timestamp);
+- re-publishing the same preview hash returned `alreadyPublished=true` and a dry-run retry returned
+  `already_published`, both with **no duplicate** memo;
+- exactly one work-log memo existed in the calendar afterward.
+
+This confirms the community adapter and the full sync state machine (gates, local-first save,
+read-back verification, duplicate prevention, idempotent re-publish) against real TimeTree endpoints.
+The calendar-safety gate was also observed to block a write to an unconfigured calendar before any
+network call.
+
+The endpoints remain unofficial and can change without notice; re-run the gated tests after upstream
+changes. Live verification used one account and one calendar; it is not a guarantee against other
+account types or future upstream behavior.
 
 ## Security review summary
 
