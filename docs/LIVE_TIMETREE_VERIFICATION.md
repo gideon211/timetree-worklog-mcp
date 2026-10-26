@@ -19,10 +19,15 @@ The automated test suite uses the mock provider. The live check is deliberately 
   injection mechanism. Do not commit them, put them in shell history, or paste them into logs.
 - Remote writes remain disabled until the write-test step below.
 
-> **Google-only accounts:** the live smoke script authenticates with email/password. If your account
-> has no password (Google sign-in only), first confirm read access using session-cookie mode by
-> running the server with `TIMETREE_SESSION_COOKIE` and calling `list_calendars` from an MCP client.
-> The smoke script itself does not yet accept a session cookie.
+> **Google-only accounts:** the live smoke script accepts either email/password or a session
+> cookie. To verify a Google-only account, capture the `_session_id` cookie from your browser and run:
+>
+> ```bash
+> TIMETREE_LIVE_SMOKE=1 \
+> TIMETREE_PROVIDER=community \
+> TIMETREE_SESSION_COOKIE="<session-value>" \
+> npm run test:live
+> ```
 
 ## 1. Read-only authentication and calendar discovery
 

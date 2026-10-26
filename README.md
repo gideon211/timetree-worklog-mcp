@@ -14,9 +14,10 @@ operation. TimeTree synchronization is optional, disabled by default, and never 
 successful until the created memo has been read back and verified.
 
 > **Project status:** local storage, validation, reports, MCP transport, mock-provider
-> synchronization, reconciliation, and failure recovery are covered by automated tests. **Live
-> TimeTree integration has not been verified against an authorized account in this repository.**
-> Do not claim that live publication works until the gated procedure in
+> synchronization, reconciliation, and failure recovery are covered by automated tests. **Read-only
+> live access** (sign-in/session, calendar and memo listing) has been verified against an authorized
+> account. **Live publication has not been exercised** — do not claim that live writes work until the
+> gated write-test procedure in
 > [docs/LIVE_TIMETREE_VERIFICATION.md](docs/LIVE_TIMETREE_VERIFICATION.md) has been completed.
 
 ---
@@ -557,7 +558,8 @@ The automated suite uses the mock provider and temporary directories. It covers:
 
 ### Gated live smoke test
 
-The live smoke test is **read-only**, requires explicit opt-in, and is not part of `npm test`:
+The live smoke test is **read-only**, requires explicit opt-in, and is not part of `npm test`. Use
+either email/password or a session cookie (for Google-only accounts):
 
 ```bash
 TIMETREE_LIVE_SMOKE=1 \
@@ -566,7 +568,13 @@ TIMETREE_PASSWORD="..." \
 npm run test:live
 ```
 
-It signs in, lists calendars, and prints only a summary. It does not print the password, session
+```bash
+TIMETREE_LIVE_SMOKE=1 \
+TIMETREE_SESSION_COOKIE="<session-value>" \
+npm run test:live
+```
+
+It authenticates, lists calendars, and prints only a summary. It does not print the password, session
 cookie, CSRF token, or note contents. Add `-- --include-memos` and set
 `TIMETREE_CALENDAR_ID` to also count memos in that one calendar. The full authorization, write-test,
 and cleanup procedure is in

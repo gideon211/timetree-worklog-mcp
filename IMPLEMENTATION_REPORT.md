@@ -112,7 +112,7 @@ npm test                 passed: 11 test files, 93 tests
 npm run test:coverage    passed: 93 tests
 npm run build            passed
 npm audit --audit-level=high   passed: 0 vulnerabilities
-npm run test:live        skipped by design (no explicit opt-in)
+npm run test:live        passed (read-only, session-cookie auth, opt-in)
 ```
 
 A separate smoke test against the built `dist/index.js` started the real stdio server, listed
@@ -158,10 +158,15 @@ branches.
 
 ### Live status
 
-The only live command executed was the opt-in smoke script with no opt-in, which exited
-successfully with the documented skip message. No live network call to TimeTree was made during
-verification. Do not describe the community provider as live-verified until the gated procedure has
-been completed.
+Read-only live access has been verified against an authorized account using session-cookie
+authentication (`TIMETREE_SESSION_COOKIE`). The opt-in smoke script authenticated, listed calendars,
+and listed memos for the configured calendar, with no memo created, updated, or deleted. This
+confirms the community adapter can reach a real account for reads.
+
+**Live remote publication has not been exercised.** No `create_memo` write was performed against a
+real account, so the create-and-verify path remains validated only by the mock provider and the
+fake-`fetch` adapter tests. Do not describe live publication as working until the gated write-test in
+the live-verification procedure has been completed against a dedicated private test calendar.
 
 ## Security review summary
 

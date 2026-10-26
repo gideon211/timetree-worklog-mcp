@@ -8,7 +8,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { hasTimeTreeCredentials, loadConfig } from '../../src/config.js';
+import { hasTimeTreeAuth, loadConfig } from '../../src/config.js';
 import { Logger } from '../../src/logger.js';
 import { createTimeTreeProvider } from '../../src/providers/timetree/index.js';
 import { ProviderError } from '../../src/providers/timetree/provider.js';
@@ -33,7 +33,8 @@ async function main(): Promise<number> {
   if (process.env.TIMETREE_LIVE_SMOKE !== '1') {
     out(
       'Live TimeTree smoke skipped.\n' +
-        'Set TIMETREE_LIVE_SMOKE=1, TIMETREE_EMAIL and TIMETREE_PASSWORD to opt in.\n' +
+        'Set TIMETREE_LIVE_SMOKE=1 and either TIMETREE_SESSION_COOKIE (Google/browser session)\n' +
+        'or TIMETREE_EMAIL and TIMETREE_PASSWORD to opt in.\n' +
         'This check is read-only and is not part of the automated test suite.\n',
     );
     return 0;
@@ -59,8 +60,11 @@ async function main(): Promise<number> {
       err('Live smoke requires TIMETREE_PROVIDER=community.\n');
       return 2;
     }
-    if (!hasTimeTreeCredentials(config)) {
-      err('Live smoke requires TIMETREE_EMAIL and TIMETREE_PASSWORD.\n');
+    if (!hasTimeTreeAuth(config)) {
+      err(
+        'Live smoke requires auth: set TIMETREE_SESSION_COOKIE (Google/browser session),\n' +
+          'or TIMETREE_EMAIL and TIMETREE_PASSWORD.\n',
+      );
       return 2;
     }
 
@@ -69,7 +73,8 @@ async function main(): Promise<number> {
       new Logger({ level: 'error', write: (line) => process.stderr.write(`${line}\n`) }),
     );
     const calendars = await provider.listCalendars();
-    out(`Read-only sign-in passed. Calendars visible: ${calendars.length}.\n`);
+    const authMode = config.timetreeSessionCookie ? 'session cookie' : 'email/password';
+    out(`Read-only auth passed (${authMode}). Calendars visible: ${calendars.length}.\n`);
 
     const includeMemos = process.argv.includes('--include-memos');
     if (includeMemos) {
