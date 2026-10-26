@@ -6,6 +6,7 @@ data/
 .env
 .env.*
 !.env.example
+mcp-config.local.json
 .envrc
 .direnv/
 .npmrc
