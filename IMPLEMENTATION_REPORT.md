@@ -108,8 +108,8 @@ Commands run from the project root:
 npm run typecheck        passed
 npm run lint             passed
 npm run format           passed (Prettier check)
-npm test                 passed: 11 test files, 91 tests
-npm run test:coverage    passed: 91 tests
+npm test                 passed: 11 test files, 93 tests
+npm run test:coverage    passed: 93 tests
 npm run build            passed
 npm audit --audit-level=high   passed: 0 vulnerabilities
 npm run test:live        skipped by design (no explicit opt-in)
@@ -123,7 +123,7 @@ bin resolves correctly under a normal npm-style link.
 Coverage from the final run:
 
 ```text
-All files: 87.74% statements, 71.41% branches, 90.80% functions, 88.77% lines
+All files: 87.82% statements, 71.86% branches, 91.28% functions, 88.84% lines
 ```
 
 The Vitest configuration enforces thresholds of 70% statements, 70% functions, 70% lines, and 60%

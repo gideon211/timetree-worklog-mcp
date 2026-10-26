@@ -93,6 +93,66 @@ describe('community TimeTree provider', () => {
     expect(requests).toBe(0);
   });
 
+  it('reuses an operator-supplied session cookie without signing in', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'timetree-community-test-'));
+    dirs.push(dir);
+    const config = loadConfig({
+      WORKLOG_DATA_DIR: dir,
+      WORKLOG_DB_PATH: join(dir, 'worklog.sqlite'),
+      WORKLOG_ARCHIVE_DIR: join(dir, 'worklogs'),
+      WORKLOG_REPORTS_DIR: join(dir, 'reports'),
+      TIMETREE_PROVIDER: 'community',
+      TIMETREE_SESSION_COOKIE: 'google-session-value',
+      TIMETREE_CALENDAR_ID: '1',
+      TIMETREE_ENABLE_REMOTE_WRITES: 'true',
+      TIMETREE_MAX_RPS: '1000',
+      TIMETREE_MAX_RETRIES: '0',
+      TIMETREE_TIMEOUT_MS: '5000',
+    });
+    const calls: Array<{ url: string; method: string; headers: Record<string, string> }> = [];
+    const fakeFetch: typeof fetch = async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      calls.push({ url, method, headers });
+      if (url.endsWith('/api/v1/auth/email/signin')) {
+        throw new Error('sign-in must not be called in session-cookie mode');
+      }
+      if (url.endsWith('/') || (method === 'GET' && url.endsWith('timetreeapp.com/'))) {
+        return new Response('<meta name="csrf-token" content="csrf-from-session">', {
+          status: 200,
+        });
+      }
+      if (url.endsWith('/api/v1/calendars?since=0')) {
+        return jsonResponse({ calendars: [{ id: 1, name: 'Work Log' }] });
+      }
+      if (url.endsWith('/api/v1/calendar/1/event') && method === 'POST') {
+        return jsonResponse({ event: { ...memoEvent, uuid: 'memo-session' } });
+      }
+      return new Response('not found', { status: 404 });
+    };
+    const provider = new CommunityTimeTreeProvider({
+      config,
+      logger: new Logger({ level: 'error', write: () => {} }),
+      fetchImpl: fakeFetch,
+    });
+
+    const calendars = await provider.listCalendars();
+    expect(calendars).toEqual([{ id: '1', name: 'Work Log', writable: true }]);
+    expect(calls.some((c) => c.url.includes('/auth/email/signin'))).toBe(false);
+    expect(calls[0]?.headers.Cookie).toBe('_session_id=google-session-value');
+
+    const created = await provider.createMemo('1', {
+      title: 'Work Log 2026-10-26 [wl_2026-10-26_africa-accra]',
+      note: 'Worklog-ID: wl_2026-10-26_africa-accra\nWorklog-Hash: abc',
+      date: '2026-10-26',
+    });
+    expect(created.id).toBe('memo-session');
+    const write = calls.find((c) => c.method === 'POST');
+    expect(write?.headers.Cookie).toBe('_session_id=google-session-value');
+    expect(write?.headers['x-csrf-token']).toBe('csrf-from-session');
+  });
+
   it('signs in with a session cookie, obtains CSRF, lists calendars and memos, and writes a memo', async () => {
     const calls: Array<{
       url: string;

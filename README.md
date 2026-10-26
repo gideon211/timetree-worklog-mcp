@@ -64,28 +64,33 @@ controls, or rate limits.
 
 ## Google sign-in accounts
 
-**This adapter only supports email/password sign-in.** It authenticates with:
+This adapter authenticates in one of two ways:
 
-```text
-PUT <TIMETREE_BASE_URL>/api/v1/auth/email/signin
-{ "uid": "<TIMETREE_EMAIL>", "password": "<TIMETREE_PASSWORD>" }
-```
+- **Email/password** — `PUT <TIMETREE_BASE_URL>/api/v1/auth/email/signin` with `uid` and `password`.
+- **Session cookie** — reuse the `_session_id` cookie from a browser session. This is the path for
+  accounts that sign in with **Google** and have no TimeTree password.
 
-There is **no Google OAuth or social-login flow**. If your TimeTree account was created with
-"Continue with Google" and you have never set a separate TimeTree password, this server **cannot
-sign in to that account** as configured.
+There is **no native Google OAuth flow**. If your account was created with "Continue with Google"
+and you have never set a TimeTree password, use **session-cookie mode**:
 
-What to check before going further:
+1. Sign in to `timetreeapp.com` in your own browser with Google.
+2. Open DevTools (`F12` or `Cmd+Option+I`) → **Application → Cookies →
+   `https://timetreeapp.com`** and copy the **Value** of the cookie named `_session_id`. (Or, in the
+   **Network** tab, open any authenticated request and copy the `_session_id=...` part of the
+   `cookie:` request header.)
+3. Put that value in `TIMETREE_SESSION_COOKIE`. The CSRF token is fetched automatically.
 
-1. Open the TimeTree app or website and look in **Account / Settings** for an option to set or
-   change a password. Some accounts that originally used Google sign-in can also be given a
-   password. If TimeTree offers this, set one, then use your email plus that password here.
-2. If there is no way to set a password on a Google-linked account, this provider will not work for
-   that account. The local-only tools (`preview_daily_worklog`, `save_worklog`,
-   `get_daily_worklog`, `search_worklogs`, `generate_progress_report`, `get_sync_status`) still work
-   with no TimeTree account at all — only the remote read/write tools need credentials.
-3. TimeTree's behavior in this area is not documented and is outside this project's control. This
-   repository cannot grant, reset, or work around your TimeTree credentials.
+A session cookie is a **bearer credential** — anyone holding it is signed in as you. It expires, so
+you will need to copy a fresh one when it stops working. Keep it out of source control and logs,
+exactly like a password. When both are set, the session cookie takes precedence over
+email/password.
+
+Alternatively, if TimeTree lets you set a password on a Google-linked account (check **Account /
+Settings**), you can use email/password mode instead.
+
+The local-only tools (`preview_daily_worklog`, `save_worklog`, `get_daily_worklog`,
+`search_worklogs`, `generate_progress_report`, `get_sync_status`) work with no TimeTree account at
+all — only the remote read/write tools need auth.
 
 Always keep `TIMETREE_ENABLE_REMOTE_WRITES=false` until you have read the
 [security and privacy](#security-and-privacy) section and the
@@ -127,7 +132,7 @@ npm run build
 Sanity checks:
 
 ```bash
-npm test          # 91 tests
+npm test          # 93 tests
 npm run verify    # typecheck + lint + format + test + build
 npm audit         # dependency vulnerabilities
 ```
@@ -156,17 +161,27 @@ Everything in this flow is local. No credentials are required and nothing is sen
 
 ## Connecting your TimeTree account
 
-> Read [Google sign-in accounts](#google-sign-in-accounts) first. Email/password sign-in is
-> required; Google-only accounts may not be usable.
+> Read [Google sign-in accounts](#google-sign-in-accounts) first. Use `TIMETREE_SESSION_COOKIE` for
+> a Google-only account, or email/password if TimeTree has given your account a password.
 
 ### Step 1 — Start read-only
 
-In your MCP client config, switch to the community provider. Keep writes disabled:
+In your MCP client config, switch to the community provider. Keep writes disabled. If you signed up
+with Google, use `TIMETREE_SESSION_COOKIE` instead of email/password (see
+[Google sign-in accounts](#google-sign-in-accounts)):
 
 ```json
 "TIMETREE_PROVIDER": "community",
 "TIMETREE_EMAIL": "your-account@example.com",
 "TIMETREE_PASSWORD": "<from OS keychain or secret injection, never a committed file>",
+"TIMETREE_ENABLE_REMOTE_WRITES": "false"
+```
+
+Or, for a Google account:
+
+```json
+"TIMETREE_PROVIDER": "community",
+"TIMETREE_SESSION_COOKIE": "<_session_id value from your browser>",
 "TIMETREE_ENABLE_REMOTE_WRITES": "false"
 ```
 
@@ -238,8 +253,10 @@ Client config locations (create or merge the `mcpServers` block):
 Examples:
 
 - [examples/mock-mcp-config.json](examples/mock-mcp-config.json) — safe local evaluation.
-- [examples/community-mcp-config.json](examples/community-mcp-config.json) — community provider,
-  writes disabled.
+- [examples/community-mcp-config.json](examples/community-mcp-config.json) — community provider with
+  email/password, writes disabled.
+- [examples/community-session-mcp-config.json](examples/community-session-mcp-config.json) —
+  community provider using a browser session cookie (Google sign-in), writes disabled.
 
 MCP client configurations commonly store secrets as plaintext. If your client supports environment
 injection, OS keychain integration, or a secret manager, use that instead of putting a password
@@ -247,25 +264,26 @@ directly in a checked-in JSON file.
 
 ## Configuration reference
 
-| Variable                        | Default                             | Purpose                                                                |
-| ------------------------------- | ----------------------------------- | ---------------------------------------------------------------------- |
-| `WORKLOG_TIMEZONE`              | `Africa/Accra`                      | Default IANA time zone for dates without an explicit timezone.         |
-| `WORKLOG_DATA_DIR`              | Platform application-data directory | Base directory for the database, archive, and reports.                 |
-| `WORKLOG_DB_PATH`               | `<WORKLOG_DATA_DIR>/worklog.sqlite` | SQLite ledger path. Use `:memory:` only for tests.                     |
-| `WORKLOG_ARCHIVE_DIR`           | `<WORKLOG_DATA_DIR>/worklogs`       | Canonical Markdown archive.                                            |
-| `WORKLOG_REPORTS_DIR`           | `<WORKLOG_DATA_DIR>/reports`        | Generated progress reports.                                            |
-| `WORKLOG_LOG_LEVEL`             | `info`                              | `debug`, `info`, `warn`, or `error`. Logs go to stderr.                |
-| `TIMETREE_PROVIDER`             | `community`                         | `community` or `mock`.                                                 |
-| `TIMETREE_BASE_URL`             | `https://timetreeapp.com`           | Unofficial TimeTree web base URL.                                      |
-| `TIMETREE_EMAIL`                | unset                               | TimeTree account email. Keep out of source control.                    |
-| `TIMETREE_PASSWORD`             | unset                               | TimeTree account password. Keep out of source control.                 |
-| `TIMETREE_CALENDAR_ID`          | unset                               | The single private calendar permitted for memos.                       |
-| `TIMETREE_ENABLE_REMOTE_WRITES` | `false`                             | Additional explicit gate for any remote write.                         |
-| `TIMETREE_MAX_RPS`              | `1`                                 | Maximum TimeTree requests per second.                                  |
-| `TIMETREE_TIMEOUT_MS`           | `20000`                             | Per-request timeout.                                                   |
-| `TIMETREE_MAX_RETRIES`          | `3`                                 | Retries for read-only requests only; writes are never retried blindly. |
-| `TIMETREE_REMOTE_MAX_CHARS`     | `20000`                             | Maximum remote note length. The local archive is never truncated.      |
-| `TIMETREE_MAX_RESPONSE_BYTES`   | `2000000`                           | Maximum accepted upstream response body.                               |
+| Variable                        | Default                             | Purpose                                                                        |
+| ------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------ |
+| `WORKLOG_TIMEZONE`              | `Africa/Accra`                      | Default IANA time zone for dates without an explicit timezone.                 |
+| `WORKLOG_DATA_DIR`              | Platform application-data directory | Base directory for the database, archive, and reports.                         |
+| `WORKLOG_DB_PATH`               | `<WORKLOG_DATA_DIR>/worklog.sqlite` | SQLite ledger path. Use `:memory:` only for tests.                             |
+| `WORKLOG_ARCHIVE_DIR`           | `<WORKLOG_DATA_DIR>/worklogs`       | Canonical Markdown archive.                                                    |
+| `WORKLOG_REPORTS_DIR`           | `<WORKLOG_DATA_DIR>/reports`        | Generated progress reports.                                                    |
+| `WORKLOG_LOG_LEVEL`             | `info`                              | `debug`, `info`, `warn`, or `error`. Logs go to stderr.                        |
+| `TIMETREE_PROVIDER`             | `community`                         | `community` or `mock`.                                                         |
+| `TIMETREE_BASE_URL`             | `https://timetreeapp.com`           | Unofficial TimeTree web base URL.                                              |
+| `TIMETREE_EMAIL`                | unset                               | TimeTree account email. Keep out of source control.                            |
+| `TIMETREE_PASSWORD`             | unset                               | TimeTree account password. Keep out of source control.                         |
+| `TIMETREE_SESSION_COOKIE`       | unset                               | Alt. auth: a browser `_session_id` cookie (Google sign-in). Bearer credential. |
+| `TIMETREE_CALENDAR_ID`          | unset                               | The single private calendar permitted for memos.                               |
+| `TIMETREE_ENABLE_REMOTE_WRITES` | `false`                             | Additional explicit gate for any remote write.                                 |
+| `TIMETREE_MAX_RPS`              | `1`                                 | Maximum TimeTree requests per second.                                          |
+| `TIMETREE_TIMEOUT_MS`           | `20000`                             | Per-request timeout.                                                           |
+| `TIMETREE_MAX_RETRIES`          | `3`                                 | Retries for read-only requests only; writes are never retried blindly.         |
+| `TIMETREE_REMOTE_MAX_CHARS`     | `20000`                             | Maximum remote note length. The local archive is never truncated.              |
+| `TIMETREE_MAX_RESPONSE_BYTES`   | `2000000`                           | Maximum accepted upstream response body.                                       |
 
 Default data directories:
 
@@ -558,8 +576,9 @@ and cleanup procedure is in
 
 - Live TimeTree publication is unverified in this repository.
 - The TimeTree community endpoints are unofficial and can change or stop working.
-- **Email/password sign-in only.** No Google OAuth, social login, or multi-account session
-  management. Google-only accounts may not be usable.
+- **No native Google OAuth.** Google-only accounts must use session-cookie mode
+  (`TIMETREE_SESSION_COOKIE`), which relies on a browser-captured bearer cookie that expires. No
+  multi-account session management.
 - No memo update or delete operation is exposed. Editing a published work log results in `STALE`
   and then `CONFLICT` rather than a remote update.
 - One configured calendar per server instance.

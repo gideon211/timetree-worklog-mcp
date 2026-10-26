@@ -79,6 +79,15 @@ function isDeactivated(value: unknown): boolean {
   return value !== undefined && value !== null && value !== 0 && value !== '';
 }
 
+function normalizeSessionCookie(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error('TIMETREE_SESSION_COOKIE is empty');
+  }
+  // Accept either a bare session value or a full "name=value" cookie string.
+  return trimmed.includes('=') ? trimmed : `_session_id=${trimmed}`;
+}
+
 async function readBodyLimited(response: Response, maxBytes: number): Promise<string> {
   const reader = response.body?.getReader();
   if (!reader) return '';
@@ -136,6 +145,7 @@ export class CommunityTimeTreeProvider implements TimeTreeProvider {
   private readonly breaker: CircuitBreaker;
   private sessionCookie: string | undefined;
   private csrfToken: string | undefined;
+  private csrfFetched = false;
   private readonly baseUrl: string;
   private readonly apiBase: string;
 
@@ -358,7 +368,11 @@ export class CommunityTimeTreeProvider implements TimeTreeProvider {
       }
       this.captureSession(response.headers);
 
-      if ((response.status === 401 || response.status === 403) && !reauthenticated) {
+      if (
+        (response.status === 401 || response.status === 403) &&
+        !reauthenticated &&
+        !this.config.timetreeSessionCookie
+      ) {
         reauthenticated = true;
         this.logger.warn('TimeTree rejected the session; re-authenticating once', {
           status: response.status,
@@ -463,6 +477,25 @@ export class CommunityTimeTreeProvider implements TimeTreeProvider {
   }
 
   private async ensureAuthenticated(): Promise<void> {
+    if (this.config.timetreeSessionCookie) {
+      // Session-cookie mode: reuse an operator-supplied session (for example one
+      // obtained by signing in with Google in a browser). No password is used.
+      if (!this.sessionCookie) {
+        try {
+          this.sessionCookie = normalizeSessionCookie(this.config.timetreeSessionCookie);
+        } catch (error) {
+          throw new ProviderError('UNCONFIGURED', 'TIMETREE_SESSION_COOKIE is empty or invalid.', {
+            retryable: false,
+            outcome: 'NOT_APPLIED',
+            cause: error,
+          });
+        }
+      }
+      if (this.csrfFetched) return;
+      await this.fetchCsrfToken();
+      this.csrfFetched = true;
+      return;
+    }
     if (this.sessionCookie) return;
     await this.signIn();
   }

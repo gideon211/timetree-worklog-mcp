@@ -1,5 +1,5 @@
 import type { AppConfig } from '../config.js';
-import { isRemoteConfigured } from '../config.js';
+import { hasTimeTreeAuth, hasTimeTreeSession, isRemoteConfigured } from '../config.js';
 import { AppError } from '../errors.js';
 import { attemptId as newAttemptId, requestFingerprint } from '../ids.js';
 import { logger as defaultLogger, type Logger } from '../logger.js';
@@ -71,6 +71,7 @@ export interface SyncStatusResult {
     provider: string;
     calendarConfigured: boolean;
     credentialsConfigured: boolean;
+    sessionConfigured: boolean;
     health: { status: string; message?: string };
   };
 }
@@ -669,7 +670,8 @@ export class SyncService {
       writesEnabled: this.config.remoteWritesEnabled,
       provider: this.provider.name,
       calendarConfigured: Boolean(this.config.calendarId),
-      credentialsConfigured: Boolean(this.config.timetreeEmail && this.config.timetreePassword),
+      credentialsConfigured: hasTimeTreeAuth(this.config),
+      sessionConfigured: hasTimeTreeSession(this.config),
       health,
     };
 

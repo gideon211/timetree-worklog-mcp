@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod/v4';
 import type { AppConfig } from '../config.js';
-import { hasTimeTreeCredentials } from '../config.js';
+import { hasTimeTreeAuth } from '../config.js';
 import { AppError, asAppError, type ErrorCode } from '../errors.js';
 import type { Logger } from '../logger.js';
 import { ProviderError } from '../providers/timetree/provider.js';
@@ -246,10 +246,10 @@ export function createMcpServer(options: {
     },
     async () =>
       run('list_calendars', logger, async () => {
-        if (config.provider === 'community' && !hasTimeTreeCredentials(config)) {
+        if (config.provider === 'community' && !hasTimeTreeAuth(config)) {
           throw new AppError(
             'TIMETREE_NOT_CONFIGURED',
-            'TimeTree credentials must be configured before listing calendars. Set TIMETREE_EMAIL and TIMETREE_PASSWORD.',
+            'TimeTree auth must be configured before listing calendars. Set TIMETREE_EMAIL and TIMETREE_PASSWORD, or TIMETREE_SESSION_COOKIE for a Google/browser session.',
           );
         }
         const calendars = await provider.listCalendars();

@@ -19,6 +19,11 @@ The automated test suite uses the mock provider. The live check is deliberately 
   injection mechanism. Do not commit them, put them in shell history, or paste them into logs.
 - Remote writes remain disabled until the write-test step below.
 
+> **Google-only accounts:** the live smoke script authenticates with email/password. If your account
+> has no password (Google sign-in only), first confirm read access using session-cookie mode by
+> running the server with `TIMETREE_SESSION_COOKIE` and calling `list_calendars` from an MCP client.
+> The smoke script itself does not yet accept a session cookie.
+
 ## 1. Read-only authentication and calendar discovery
 
 Use a temporary local data directory so the smoke check cannot touch real archives:

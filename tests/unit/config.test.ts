@@ -2,7 +2,12 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadConfig } from '../../src/config.js';
+import {
+  loadConfig,
+  hasTimeTreeAuth,
+  hasTimeTreeSession,
+  isRemoteConfigured,
+} from '../../src/config.js';
 
 const posixOnly = process.platform === 'win32' ? it.skip : it;
 
@@ -48,6 +53,29 @@ describe('configuration directories', () => {
       expect(mode(dataDir)).toBe(0o700);
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('TimeTree session-cookie authentication', () => {
+  it('treats a session cookie as sufficient auth with a configured calendar', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'timetree-worklog-config-'));
+    try {
+      const config = loadConfig({
+        WORKLOG_DATA_DIR: dir,
+        WORKLOG_DB_PATH: join(dir, 'worklog.sqlite'),
+        WORKLOG_ARCHIVE_DIR: join(dir, 'worklogs'),
+        WORKLOG_REPORTS_DIR: join(dir, 'reports'),
+        TIMETREE_PROVIDER: 'community',
+        TIMETREE_SESSION_COOKIE: 'a-session-value',
+        TIMETREE_CALENDAR_ID: '1',
+      });
+      expect(hasTimeTreeSession(config)).toBe(true);
+      expect(hasTimeTreeAuth(config)).toBe(true);
+      expect(isRemoteConfigured(config)).toBe(true);
+      expect(config.timetreeSessionCookie).toBe('a-session-value');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

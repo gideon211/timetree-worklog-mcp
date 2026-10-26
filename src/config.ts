@@ -16,6 +16,7 @@ export interface AppConfig {
   timetreeBaseUrl: string;
   timetreeEmail?: string;
   timetreePassword?: string;
+  timetreeSessionCookie?: string;
   calendarId?: string;
   remoteWritesEnabled: boolean;
   maxRequestsPerSecond: number;
@@ -38,6 +39,7 @@ const EnvSchema = z
     TIMETREE_BASE_URL: z.string().url().default('https://timetreeapp.com'),
     TIMETREE_EMAIL: z.string().optional(),
     TIMETREE_PASSWORD: z.string().optional(),
+    TIMETREE_SESSION_COOKIE: z.string().optional(),
     TIMETREE_CALENDAR_ID: z.string().optional(),
     TIMETREE_ENABLE_REMOTE_WRITES: z.string().optional(),
     TIMETREE_MAX_RPS: z.coerce.number().positive().default(1),
@@ -110,6 +112,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     timetreeBaseUrl: parsed.TIMETREE_BASE_URL.replace(/\/+$/, ''),
     ...(parsed.TIMETREE_EMAIL ? { timetreeEmail: parsed.TIMETREE_EMAIL } : {}),
     ...(parsed.TIMETREE_PASSWORD ? { timetreePassword: parsed.TIMETREE_PASSWORD } : {}),
+    ...(parsed.TIMETREE_SESSION_COOKIE
+      ? { timetreeSessionCookie: parsed.TIMETREE_SESSION_COOKIE }
+      : {}),
     ...(parsed.TIMETREE_CALENDAR_ID ? { calendarId: parsed.TIMETREE_CALENDAR_ID } : {}),
     remoteWritesEnabled: parseBoolean(parsed.TIMETREE_ENABLE_REMOTE_WRITES, false),
     maxRequestsPerSecond: parsed.TIMETREE_MAX_RPS,
@@ -134,8 +139,16 @@ export function hasTimeTreeCredentials(config: AppConfig): boolean {
   return Boolean(config.timetreeEmail && config.timetreePassword);
 }
 
+export function hasTimeTreeSession(config: AppConfig): boolean {
+  return Boolean(config.timetreeSessionCookie);
+}
+
+export function hasTimeTreeAuth(config: AppConfig): boolean {
+  return hasTimeTreeCredentials(config) || hasTimeTreeSession(config);
+}
+
 export function isRemoteConfigured(config: AppConfig): boolean {
-  return hasTimeTreeCredentials(config) && Boolean(config.calendarId);
+  return hasTimeTreeAuth(config) && Boolean(config.calendarId);
 }
 
 export function configSummary(config: AppConfig): Record<string, unknown> {
@@ -146,6 +159,7 @@ export function configSummary(config: AppConfig): Record<string, unknown> {
     remoteWritesEnabled: config.remoteWritesEnabled,
     calendarConfigured: Boolean(config.calendarId),
     credentialsConfigured: Boolean(config.timetreeEmail && config.timetreePassword),
+    sessionConfigured: Boolean(config.timetreeSessionCookie),
     maxRequestsPerSecond: config.maxRequestsPerSecond,
     requestTimeoutMs: config.requestTimeoutMs,
     remoteMaxChars: config.remoteMaxChars,
