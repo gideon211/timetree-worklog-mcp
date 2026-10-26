@@ -209,6 +209,6 @@ been completed.
 
 ## Repository state
 
-The project source is intended for the repository
-`https://github.com/gideon211/timetree-worklog-mcp.git`. The lockfile is included. No credentials,
-test artifacts, coverage output, `dist/`, or local data are intended for source control.
+Published on `main` at `https://github.com/gideon211/timetree-worklog-mcp`. The initial
+implementation commit is `bb2c93356e462372c88607d03ea8c91db48ec118`. The lockfile is included. No
+credentials, test artifacts, coverage output, `dist/`, or local data are tracked.
