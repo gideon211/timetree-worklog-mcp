@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "timetree-worklog": {
+      "command": "node",
+      "args": ["/absolute/path/to/timetree-worklog-mcp/dist/index.js"],
+      "env": {
+        "WORKLOG_TIMEZONE": "Africa/Accra",
+        "WORKLOG_LOG_LEVEL": "info",
+        "TIMETREE_PROVIDER": "mock",
+        "TIMETREE_CALENDAR_ID": "cal_worklog",
+        "TIMETREE_ENABLE_REMOTE_WRITES": "false"
+      }
+    }
+  }
+}

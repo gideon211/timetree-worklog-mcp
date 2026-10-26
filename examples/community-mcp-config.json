@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "timetree-worklog": {
+      "command": "node",
+      "args": ["/absolute/path/to/timetree-worklog-mcp/dist/index.js"],
+      "env": {
+        "WORKLOG_TIMEZONE": "Africa/Accra",
+        "WORKLOG_LOG_LEVEL": "info",
+        "TIMETREE_PROVIDER": "community",
+        "TIMETREE_EMAIL": "operator@example.com",
+        "TIMETREE_PASSWORD": "replace-with-a-secret-injection-reference",
+        "TIMETREE_CALENDAR_ID": "replace-with-private-calendar-id",
+        "TIMETREE_ENABLE_REMOTE_WRITES": "false",
+        "TIMETREE_MAX_RPS": "1",
+        "TIMETREE_TIMEOUT_MS": "20000",
+        "TIMETREE_MAX_RETRIES": "3",
+        "TIMETREE_REMOTE_MAX_CHARS": "20000",
+        "TIMETREE_MAX_RESPONSE_BYTES": "2000000"
+      }
+    }
+  }
+}
