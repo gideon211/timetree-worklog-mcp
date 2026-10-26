@@ -8,7 +8,7 @@
         "WORKLOG_LOG_LEVEL": "info",
         "TIMETREE_PROVIDER": "community",
         "TIMETREE_SESSION_COOKIE": "paste-the-_session_id-value-here",
-        "TIMETREE_CALENDAR_ID": "replace-with-private-calendar-id",
+        "TIMETREE_CALENDAR_ID": "1056744553",
         "TIMETREE_ENABLE_REMOTE_WRITES": "false",
         "TIMETREE_MAX_RPS": "1",
         "TIMETREE_TIMEOUT_MS": "20000",
