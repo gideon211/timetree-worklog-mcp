@@ -108,8 +108,8 @@ Commands run from the project root:
 npm run typecheck        passed
 npm run lint             passed
 npm run format           passed (Prettier check)
-npm test                 passed: 11 test files, 85 tests
-npm run test:coverage    passed: 85 tests
+npm test                 passed: 11 test files, 91 tests
+npm run test:coverage    passed: 91 tests
 npm run build            passed
 npm audit --audit-level=high   passed: 0 vulnerabilities
 npm run test:live        skipped by design (no explicit opt-in)
@@ -123,7 +123,7 @@ bin resolves correctly under a normal npm-style link.
 Coverage from the final run:
 
 ```text
-All files: 87.41% statements, 71.44% branches, 90.58% functions, 88.47% lines
+All files: 87.74% statements, 71.41% branches, 90.80% functions, 88.77% lines
 ```
 
 The Vitest configuration enforces thresholds of 70% statements, 70% functions, 70% lines, and 60%
@@ -143,11 +143,14 @@ branches.
   HTTP 403, sign-in 5xx classification, response byte cap, timeout outcome, no write retry after
   server error, circuit breaker.
 - Sync: disabled writes, confirmation, preview hash, calendar mismatch, secret block, verified
-  publication, duplicate prevention, pre-write and post-write timeouts, read-back failure,
-  conflict, conflict clearing without an automatic second create, disappeared recorded memos,
-  retryable vs permanent failures, explicit recovery from a permanent failure after repair,
-  operator-blocked worklogs, reconciliation failure, per-worklog retry failure without aborting the
-  batch, restart recovery, stale edits, dry-run default, retry confirmation, status.
+  publication, duplicate prevention, concurrent publish serialization, local changes during
+  preparation, reconciliation and the remote create, pre-write and post-write timeouts, read-back
+  failure, conflict, duplicate remote memos, conflict clearing without an automatic second create,
+  disappeared recorded memos, retryable vs permanent failures, explicit recovery from a permanent
+  failure after repair,
+  operator-blocked worklogs, no first publication through retry, reconciliation failure,
+  per-worklog retry failure without aborting the batch, restart recovery, stale edits, dry-run
+  default, retry confirmation, status.
 - MCP: exact tool set, no destructive names, list calendars before calendar-ID setup, structured
   success/error envelopes, schema rejection, in-memory transport, real stdio round trip.
 - Protection primitives: circuit threshold/reset, capped backoff, and private application
@@ -197,6 +200,12 @@ been completed.
 8. **No automatic reindex.** The Markdown archive is canonical, but if the SQLite database is lost,
    the server does not rebuild its index by scanning the archive. Back up both the database and the
    Markdown files.
+9. **One process per data directory.** Publication and retry operations are serialized within one
+   server process. Multiple server processes sharing a database are not coordinated; run one.
+10. **Local write during a remote create.** Publication re-checks the local content hash after
+    reconciliation and again after read-back. If a local save lands during the remote request, the
+    verified memo represents the previous revision and the state is `STALE`, not `PUBLISHED`; never
+    republish without reviewing it.
 
 ## Handoff
 

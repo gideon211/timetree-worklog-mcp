@@ -133,7 +133,7 @@ describe('stdio E2E', () => {
         data: { dryRun: boolean; results: Array<{ action: string }> };
       };
       expect(retryData.data.dryRun).toBe(true);
-      expect(retryData.data.results[0]?.action).toBe('would_publish');
+      expect(retryData.data.results[0]?.action).toBe('not_retryable');
     } finally {
       await client.close().catch(() => {});
       rmSync(dir, { recursive: true, force: true });

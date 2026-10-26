@@ -89,6 +89,7 @@ export interface RetryResult {
     | 'already_published'
     | 'conflict'
     | 'uncertain'
+    | 'stale'
     | 'failed'
     | 'not_retryable'
     | 'reconcile_failed'
@@ -125,6 +126,7 @@ export class SyncService {
   private readonly provider: TimeTreeProvider;
   private readonly worklogs: WorklogService;
   private readonly logger: Logger;
+  private publicationQueue: Promise<void> = Promise.resolve();
 
   constructor(
     config: AppConfig,
@@ -141,6 +143,10 @@ export class SyncService {
   }
 
   async publish(input: PublishInput): Promise<PublishResult> {
+    return this.withPublicationLock(() => this.publishLocked(input));
+  }
+
+  private async publishLocked(input: PublishInput): Promise<PublishResult> {
     this.assertWritesEnabled();
     const calendarId = this.calendarId(input.calendarId);
     if (input.confirmation !== 'PUBLISH') {
@@ -216,6 +222,21 @@ export class SyncService {
       };
     }
 
+    if (reconciliation.state === 'STALE') {
+      return {
+        worklogId: input.worklogId,
+        state: 'STALE',
+        verified: true,
+        alreadyPublished: false,
+        calendarId,
+        ...(reconciliation.memoId ? { memoId: reconciliation.memoId } : {}),
+        attemptIds: [],
+        warnings: [
+          reconciliation.message ??
+            'The remote memo verifies a previous revision because local content changed during reconciliation. Review the change before publishing again.',
+        ],
+      };
+    }
     if (reconciliation.state === 'PUBLISHED') {
       return {
         worklogId: input.worklogId,
@@ -245,7 +266,9 @@ export class SyncService {
         ],
         error: {
           code: 'SYNC_CONFLICT',
-          message: 'A remote memo exists with different content. No duplicate was created.',
+          message:
+            reconciliation.message ??
+            'A remote memo exists with different content. No duplicate was created.',
           retryable: false,
         },
       };
@@ -263,6 +286,14 @@ export class SyncService {
           'The prior conflict is cleared because no matching memo was found. Inspect the configured calendar, then call publish_worklog again if a new memo is intended.',
         ],
       };
+    }
+
+    const latest = this.worklogs.resolve({ worklogId: input.worklogId });
+    if (latest.contentHash !== document.contentHash) {
+      throw new AppError(
+        'PREVIEW_REQUIRED',
+        'The work log changed while publication was being prepared. Preview and save the current revision again before publishing.',
+      );
     }
 
     const remote = this.worklogs.remotePayloadFor(document);
@@ -348,17 +379,22 @@ export class SyncService {
 
     if (verifiedMemo) {
       const verifiedAt = nowIso();
-      this.ledger.finishAttempt(attempt.attemptId, 'PUBLISHED', { memoId: verifiedMemo.id });
+      const latest = this.worklogs.resolve({ worklogId: input.worklogId });
+      const localChanged = latest.contentHash !== document.contentHash;
+      const state: SyncState = localChanged ? 'STALE' : 'PUBLISHED';
+      this.ledger.finishAttempt(attempt.attemptId, state, { memoId: verifiedMemo.id });
       this.ledger.updateSync(input.worklogId, {
-        state: 'PUBLISHED',
+        state,
         calendarId,
         memoId: verifiedMemo.id,
         remoteTitle: verifiedMemo.title,
         remoteHash: document.contentHash,
         publishedAt: verifiedAt,
         verifiedAt,
-        lastErrorCode: null,
-        lastErrorMessage: null,
+        lastErrorCode: localChanged ? 'LOCAL_CHANGED_DURING_PUBLISH' : null,
+        lastErrorMessage: localChanged
+          ? 'The local work log changed while the remote memo was being created.'
+          : null,
       });
       this.ledger.upsertRemoteMemo({
         calendarId,
@@ -369,9 +405,14 @@ export class SyncService {
         ...(verifiedMemo.updatedAt ? { remoteUpdatedAt: verifiedMemo.updatedAt } : {}),
       });
       const warnings = this.refresh(input.worklogId);
+      if (localChanged) {
+        warnings.push(
+          'The remote memo verifies the previous revision because local content changed during publication. The state is STALE; review the change before publishing again.',
+        );
+      }
       return {
         worklogId: input.worklogId,
-        state: 'PUBLISHED',
+        state,
         verified: true,
         alreadyPublished: false,
         calendarId,
@@ -418,7 +459,11 @@ export class SyncService {
     };
   }
 
-  async reconcile(worklogId: string, calendarIdInput?: string): Promise<ReconcileResult> {
+  async reconcile(
+    worklogId: string,
+    calendarIdInput?: string,
+    persistAbsence = true,
+  ): Promise<ReconcileResult> {
     const calendarId = this.calendarId(calendarIdInput);
     this.assertReadReady();
     const document = this.worklogs.resolve({ worklogId });
@@ -434,10 +479,72 @@ export class SyncService {
       throw providerError;
     }
 
-    const found = memos.find((memo) => memoMatches(memo, worklogId));
+    const matches = memos.filter((memo) => memoMatches(memo, worklogId));
+    if (matches.length > 1) {
+      const first = matches[0]!;
+      const remoteHash = memoHash(first);
+      this.ledger.updateSync(worklogId, {
+        state: 'CONFLICT',
+        calendarId,
+        memoId: first.id,
+        remoteTitle: first.title,
+        remoteHash: remoteHash ?? null,
+        lastErrorCode: 'SYNC_DUPLICATE',
+        lastErrorMessage:
+          'Multiple remote memos declare this worklog ID. Resolve the duplicate manually; no new memo was created.',
+      });
+      this.refresh(worklogId);
+      return {
+        worklogId,
+        state: 'CONFLICT',
+        verified: false,
+        found: true,
+        memoId: first.id,
+        ...(remoteHash ? { remoteHash } : {}),
+        message:
+          'Multiple remote memos declare this worklog ID. Resolve the duplicate manually; no new memo was created.',
+      };
+    }
+
+    const found = matches[0];
     if (found) {
       const remoteHash = memoHash(found);
       if (remoteHash === document.contentHash) {
+        const latest = this.worklogs.resolve({ worklogId });
+        if (latest.contentHash !== document.contentHash) {
+          const verifiedAt = nowIso();
+          this.ledger.upsertRemoteMemo({
+            calendarId,
+            memoId: found.id,
+            worklogId,
+            title: found.title,
+            ...(remoteHash ? { contentHash: remoteHash } : {}),
+            ...(found.updatedAt ? { remoteUpdatedAt: found.updatedAt } : {}),
+          });
+          this.ledger.updateSync(worklogId, {
+            state: 'STALE',
+            calendarId,
+            memoId: found.id,
+            remoteTitle: found.title,
+            remoteHash,
+            publishedAt: document.sync.publishedAt ?? verifiedAt,
+            verifiedAt,
+            lastErrorCode: 'LOCAL_CHANGED_DURING_RECONCILE',
+            lastErrorMessage:
+              'The local work log changed while reconciliation was running; the verified memo represents the previous revision.',
+          });
+          this.refresh(worklogId);
+          return {
+            worklogId,
+            state: 'STALE',
+            verified: true,
+            found: true,
+            memoId: found.id,
+            remoteHash,
+            message:
+              'The remote memo verifies the previous revision because local content changed during reconciliation. The state is STALE; review the change before publishing again.',
+          };
+        }
         this.ledger.upsertRemoteMemo({
           calendarId,
           memoId: found.id,
@@ -503,22 +610,24 @@ export class SyncService {
       nextState = 'NOT_PUBLISHED';
     }
 
-    this.ledger.updateSync(worklogId, {
-      state: nextState,
-      calendarId,
-      memoId: null,
-      remoteTitle: null,
-      remoteHash: null,
-      ...(nextState === 'NOT_PUBLISHED' ? { lastErrorCode: null, lastErrorMessage: null } : {}),
-      ...(nextState === 'CONFLICT'
-        ? {
-            lastErrorCode: 'SYNC_CONFLICT',
-            lastErrorMessage:
-              'The work log previously had a recorded memo, but no matching memo was found in the configured calendar.',
-          }
-        : {}),
-    });
-    this.refresh(worklogId);
+    if (persistAbsence) {
+      this.ledger.updateSync(worklogId, {
+        state: nextState,
+        calendarId,
+        memoId: null,
+        remoteTitle: null,
+        remoteHash: null,
+        ...(nextState === 'NOT_PUBLISHED' ? { lastErrorCode: null, lastErrorMessage: null } : {}),
+        ...(nextState === 'CONFLICT'
+          ? {
+              lastErrorCode: 'SYNC_CONFLICT',
+              lastErrorMessage:
+                'The work log previously had a recorded memo, but no matching memo was found in the configured calendar.',
+            }
+          : {}),
+      });
+      this.refresh(worklogId);
+    }
     return {
       worklogId,
       state: nextState,
@@ -596,6 +705,10 @@ export class SyncService {
   }
 
   async retryPending(input: RetryPendingInput = {}): Promise<RetryPendingResult> {
+    return this.withPublicationLock(() => this.retryPendingLocked(input));
+  }
+
+  private async retryPendingLocked(input: RetryPendingInput = {}): Promise<RetryPendingResult> {
     const dryRun = input.dryRun ?? true;
     if (!dryRun) {
       this.assertWritesEnabled();
@@ -648,10 +761,23 @@ export class SyncService {
         });
         continue;
       }
+      if (document.sync.state === 'NOT_PUBLISHED') {
+        results.push({
+          worklogId: document.worklogId,
+          action: 'not_retryable',
+          state: document.sync.state,
+          message:
+            'This work log has no publication attempt to retry. Use publish_worklog only after reviewing its preview.',
+        });
+        continue;
+      }
 
       let reconciled: ReconcileResult;
       try {
-        reconciled = await this.reconcile(document.worklogId);
+        // A dry run may record a verified memo or conflict, but it must not downgrade
+        // an uncertain or publishing attempt to NOT_PUBLISHED merely because a listing
+        // is empty. Absence is persisted only by a live retry.
+        reconciled = await this.reconcile(document.worklogId, undefined, !dryRun);
       } catch (error) {
         const providerError = this.asProviderError(error);
         results.push({
@@ -684,6 +810,18 @@ export class SyncService {
         });
         continue;
       }
+      if (reconciled.state === 'STALE') {
+        results.push({
+          worklogId: document.worklogId,
+          action: 'stale',
+          state: 'STALE',
+          ...(reconciled.memoId ? { memoId: reconciled.memoId } : {}),
+          message:
+            reconciled.message ??
+            'The verified remote memo represents a previous revision; review the local change before publishing again.',
+        });
+        continue;
+      }
 
       if (dryRun) {
         results.push({
@@ -698,7 +836,7 @@ export class SyncService {
       const current = this.worklogs.resolve({ worklogId: document.worklogId });
       let published: PublishResult;
       try {
-        published = await this.publish({
+        published = await this.publishLocked({
           worklogId: document.worklogId,
           previewHash: this.worklogs.previewHashFor(current),
           confirmation: 'PUBLISH',
@@ -735,16 +873,21 @@ export class SyncService {
             ? 'conflict'
             : published.state === 'UNCERTAIN'
               ? 'uncertain'
-              : 'failed';
+              : published.state === 'STALE'
+                ? 'stale'
+                : 'failed';
       results.push({
         worklogId: document.worklogId,
         action,
         state: published.state,
         ...(published.memoId ? { memoId: published.memoId } : {}),
         ...(published.error ? { error: published.error.message } : {}),
-        message: published.verified
-          ? 'Remote memo created and verified.'
-          : 'Remote write did not reach a verified published state.',
+        message:
+          published.state === 'STALE'
+            ? 'The remote memo was verified for the previous revision; local content changed during publication. Review before publishing again.'
+            : published.verified
+              ? 'Remote memo created and verified.'
+              : 'Remote write did not reach a verified published state.',
       });
     }
 
@@ -848,5 +991,19 @@ export class SyncService {
       retryable: true,
       outcome: fallbackOutcome,
     });
+  }
+
+  private async withPublicationLock<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.publicationQueue;
+    let release!: () => void;
+    this.publicationQueue = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
   }
 }

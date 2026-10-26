@@ -461,7 +461,7 @@ export function createMcpServer(options: {
     {
       title: 'Retry pending work-log synchronization',
       description:
-        'Reconcile pending, failed or uncertain work logs before any retry. Defaults to dryRun: true, which lists what would happen without writing. A live retry requires remote writes enabled and confirmation RETRY, is limited to 10 work logs per call, never retries CONFLICT or FAILED_PERMANENT records, and re-verifies every created memo. Never assume a timeout means no memo.',
+        'Reconcile pending, failed or uncertain work logs before any retry. Defaults to dryRun: true; a dry run records a verified memo or conflict but does not persist an empty listing as absence. A live retry requires remote writes enabled and confirmation RETRY, is limited to 10 work logs per call, never retries CONFLICT, FAILED_PERMANENT, BLOCKED or NOT_PUBLISHED records, and never performs a first publication. Re-verifies every created memo. Never assume a timeout means no memo.',
       inputSchema: RetryInput,
       outputSchema: ResultSchema,
       annotations: {

@@ -86,7 +86,12 @@ pre-write reconciliation still runs first.
 The create attempt is recorded as `IN_FLIGHT` and the state becomes `PUBLISHING` before the network
 call. A provider error with outcome `UNKNOWN` or `APPLIED` becomes `UNCERTAIN`, never success.
 After a create, the memo is read back and both the stable ID and content hash must match before the
-state becomes `PUBLISHED`.
+state becomes `PUBLISHED`. If local content changed during the remote create, the verified memo is
+still recorded but the state becomes `STALE`, not `PUBLISHED`. The same applies when a local save
+lands during reconciliation and the remote memo verifies the previous revision. Publication and
+retry calls are serialized within one server process. The content hash is re-checked after each
+remote read, immediately before the create, and again after read-back. Run one server process per data
+directory; cross-process coordination is not implemented.
 
 ## Reconciliation
 
@@ -97,13 +102,18 @@ the note metadata or title.
 | ---------------------------------------------------------------- | ---------------------------------------- |
 | Matching ID and matching hash                                    | `PUBLISHED`                              |
 | Matching ID and different hash                                   | `CONFLICT`                               |
+| Multiple memos declaring the same ID                             | `CONFLICT` (resolve duplicate manually)  |
 | No matching ID, prior `PUBLISHED`/`STALE` or a recorded memo ID  | `CONFLICT` (do not republish blindly)    |
 | No matching ID, prior `CONFLICT`                                 | `NOT_PUBLISHED`                          |
 | No matching ID, prior failed/uncertain/publishing without a memo | Previous failed state or `NOT_PUBLISHED` |
 | Listing failure                                                  | Leave safe state and do not write        |
 
 `retry_pending_sync` always reconciles before a live retry. Retries are limited to 10 work logs per
-call. `CONFLICT` and `FAILED_PERMANENT` are skipped.
+call. `CONFLICT`, `FAILED_PERMANENT`, `BLOCKED`, and a worklog that has never been published
+(`NOT_PUBLISHED`) are skipped. An `UNCERTAIN` or `PUBLISHING` worklog may proceed only after
+reconciliation confirms that no memo exists. A dry run records a remote memo that it finds
+(matching or conflicting) but does not persist an empty listing as absence or disappearance; only a
+live retry may downgrade an uncertain attempt to `NOT_PUBLISHED` and create a replacement memo.
 
 If `publish_worklog` reconciles a prior `CONFLICT` to `NOT_PUBLISHED`, it returns that state without
 creating a memo. This requires a second explicit publish after the operator inspects the calendar,
@@ -119,6 +129,7 @@ known retryable failure          -> FAILED_RETRYABLE
 known permanent failure          -> FAILED_PERMANENT
 unknown write outcome            -> UNCERTAIN
 edit after PUBLISHED/CONFLICT/PUBLISHING/UNCERTAIN -> STALE
+local change during publish/reconcile for a verified memo -> STALE
 edit after retryable/permanent failure              -> NOT_PUBLISHED (reconciled before publish)
 matching ID, different hash                         -> CONFLICT
 published memo disappears                           -> CONFLICT

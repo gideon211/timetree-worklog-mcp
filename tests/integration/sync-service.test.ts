@@ -96,6 +96,116 @@ describe('sync service', () => {
     expect(JSON.stringify(h.provider.memosFor('cal_worklog'))).not.toContain(token);
   });
 
+  it('serializes concurrent publish attempts and creates exactly one memo', async () => {
+    const h = harness();
+    const { saved } = saveAndPreview(h);
+    const original = h.provider.createMemo.bind(h.provider);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    h.provider.createMemo = async (calendarId, input) => {
+      entered();
+      await gate;
+      return original(calendarId, input);
+    };
+    const publishInput = {
+      worklogId: saved.document.worklogId,
+      previewHash: h.worklogs.previewHashFor(saved.document),
+      confirmation: 'PUBLISH' as const,
+    };
+
+    const first = h.sync.publish(publishInput);
+    await started;
+    const second = h.sync.publish(publishInput);
+    release();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(firstResult.state).toBe('PUBLISHED');
+    expect(secondResult.state).toBe('PUBLISHED');
+    expect(secondResult.alreadyPublished).toBe(true);
+    expect(h.provider.calls.createMemo).toBe(1);
+    expect(h.provider.memosFor('cal_worklog')).toHaveLength(1);
+  });
+
+  it('refuses to create a memo if the local worklog changes during preparation', async () => {
+    const h = harness();
+    const { saved } = saveAndPreview(h);
+    const original = h.provider.listMemos.bind(h.provider);
+    let changed = false;
+    h.provider.listMemos = async (calendarId) => {
+      if (!changed) {
+        changed = true;
+        h.worklogs.save(baseInput({ executiveSummary: 'Changed while publication was running.' }));
+      }
+      return original(calendarId);
+    };
+
+    await expect(
+      h.sync.publish({
+        worklogId: saved.document.worklogId,
+        previewHash: h.worklogs.previewHashFor(saved.document),
+        confirmation: 'PUBLISH',
+      }),
+    ).rejects.toMatchObject({ code: 'PREVIEW_REQUIRED' });
+    expect(h.provider.calls.createMemo).toBe(0);
+    expect(h.provider.memosFor('cal_worklog')).toHaveLength(0);
+  });
+
+  it('marks the publication stale when local content changes during the remote create', async () => {
+    const h = harness();
+    const { saved } = saveAndPreview(h);
+    const original = h.provider.createMemo.bind(h.provider);
+    h.provider.createMemo = async (calendarId, input) => {
+      const memo = await original(calendarId, input);
+      h.worklogs.save(baseInput({ executiveSummary: 'Changed during the remote create.' }));
+      return memo;
+    };
+
+    const result = await h.sync.publish({
+      worklogId: saved.document.worklogId,
+      previewHash: h.worklogs.previewHashFor(saved.document),
+      confirmation: 'PUBLISH',
+    });
+    expect(result.state).toBe('STALE');
+    expect(result.verified).toBe(true);
+    expect(result.warnings.join(' ')).toMatch(/changed during publication/i);
+    expect(h.provider.calls.createMemo).toBe(1);
+    expect(h.provider.memosFor('cal_worklog')).toHaveLength(1);
+    expect(h.worklogs.resolve({ worklogId: saved.document.worklogId }).sync.state).toBe('STALE');
+    expect(h.ledger.findRemoteMemo('cal_worklog', saved.document.worklogId)?.memoId).toBeTruthy();
+  });
+
+  it('marks the state stale when local content changes during reconciliation', async () => {
+    const h = harness();
+    const { saved } = await publishSaved(h);
+    const original = h.provider.listMemos.bind(h.provider);
+    let changed = false;
+    h.provider.listMemos = async (calendarId) => {
+      if (!changed) {
+        changed = true;
+        h.worklogs.save(baseInput({ executiveSummary: 'Changed during reconciliation.' }));
+      }
+      return original(calendarId);
+    };
+
+    const result = await h.sync.publish({
+      worklogId: saved.document.worklogId,
+      previewHash: h.worklogs.previewHashFor(saved.document),
+      confirmation: 'PUBLISH',
+    });
+    expect(result.state).toBe('STALE');
+    expect(result.verified).toBe(true);
+    expect(result.warnings.join(' ')).toMatch(/previous revision/i);
+    expect(h.provider.calls.createMemo).toBe(1);
+    expect(h.provider.memosFor('cal_worklog')).toHaveLength(1);
+    expect(h.worklogs.resolve({ worklogId: saved.document.worklogId }).sync.state).toBe('STALE');
+  });
+
   it('publishes once and verifies the memo by reading it back', async () => {
     const h = harness();
     const { saved, result } = await publishSaved(h);
@@ -148,6 +258,9 @@ describe('sync service', () => {
     const dry = await h.sync.retryPending({ worklogId: saved.document.worklogId });
     expect(dry.dryRun).toBe(true);
     expect(dry.results[0]?.action).toBe('would_publish');
+    expect(h.worklogs.resolve({ worklogId: saved.document.worklogId }).sync.state).toBe(
+      'UNCERTAIN',
+    );
     expect(h.provider.memosFor('cal_worklog')).toHaveLength(0);
 
     const live = await h.sync.retryPending({
@@ -228,6 +341,31 @@ describe('sync service', () => {
     expect(dry.results[0]?.action).toBe('already_published');
     expect(dry.results[0]?.state).toBe('PUBLISHED');
     expect(h.provider.memosFor('cal_worklog')).toHaveLength(1);
+  });
+
+  it('reports duplicate remote memos as a conflict instead of publishing again', async () => {
+    const h = harness();
+    const { saved } = saveAndPreview(h);
+    for (const id of ['memo_duplicate_1', 'memo_duplicate_2']) {
+      h.provider.seedMemo({
+        id,
+        calendarId: 'cal_worklog',
+        title: `Work Log 2026-10-26 [${saved.document.worklogId}]`,
+        note: `Worklog-ID: ${saved.document.worklogId}\nWorklog-Hash: ${saved.document.contentHash}`,
+        date: '2026-10-26',
+      });
+    }
+
+    const result = await h.sync.publish({
+      worklogId: saved.document.worklogId,
+      previewHash: h.worklogs.previewHashFor(saved.document),
+      confirmation: 'PUBLISH',
+    });
+    expect(result.state).toBe('CONFLICT');
+    expect(result.memoId).toBe('memo_duplicate_1');
+    expect(result.warnings.join(' ')).toMatch(/multiple remote memos/i);
+    expect(h.provider.calls.createMemo).toBe(0);
+    expect(h.provider.memosFor('cal_worklog')).toHaveLength(2);
   });
 
   it('handles a conflict without a duplicate and requires a second publish after clearing', async () => {
@@ -398,6 +536,22 @@ describe('sync service', () => {
     expect(result.state).toBe('FAILED_PERMANENT');
     const retry = await h.sync.retryPending({ worklogId: saved.document.worklogId });
     expect(retry.results[0]?.action).toBe('not_retryable');
+    expect(h.provider.memosFor('cal_worklog')).toHaveLength(0);
+  });
+
+  it('does not perform a first publication through retry_pending_sync', async () => {
+    const h = harness();
+    const { saved } = saveAndPreview(h);
+
+    const retry = await h.sync.retryPending({
+      worklogId: saved.document.worklogId,
+      dryRun: false,
+      confirmation: 'RETRY',
+    });
+    expect(retry.results[0]?.action).toBe('not_retryable');
+    expect(retry.results[0]?.state).toBe('NOT_PUBLISHED');
+    expect(h.provider.calls.listMemos).toBe(0);
+    expect(h.provider.calls.createMemo).toBe(0);
     expect(h.provider.memosFor('cal_worklog')).toHaveLength(0);
   });
 

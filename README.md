@@ -175,7 +175,7 @@ The MCP surface is deliberately limited to these nine tools.
 | `generate_progress_report` | Local write       | Build and write an attributed Markdown progress report.                                           |
 | `publish_worklog`          | Remote write      | Create and verify one memo after all gates pass.                                                  |
 | `get_sync_status`          | Local read        | Show counts, per-worklog state, attempts, and provider health.                                    |
-| `retry_pending_sync`       | Remote read/write | Reconcile first; live writes require explicit confirmation.                                       |
+| `retry_pending_sync`       | Remote read/write | Reconcile prior attempts; never performs a first publication.                                     |
 
 Every successful tool response uses an `{ "ok": true, "data": ... }` envelope. Failures use
 `{ "ok": false, "error": { "code", "message", "retryable", "details?" } }` and the MCP `isError`
@@ -254,33 +254,39 @@ retained so reconciliation can still verify identity and content.
 
 ## Synchronization states
 
-| State              | Meaning                                                                                      |
-| ------------------ | -------------------------------------------------------------------------------------------- |
-| `NOT_PUBLISHED`    | Saved locally and eligible for publication.                                                  |
-| `PUBLISHING`       | A create attempt was durably recorded before the remote call.                                |
-| `PUBLISHED`        | A memo was read back and its ID and content hash matched.                                    |
-| `FAILED_RETRYABLE` | The write failed with a retryable error and a known not-applied outcome.                     |
-| `FAILED_PERMANENT` | The write failed permanently or the upstream rejected it.                                    |
-| `UNCERTAIN`        | The write outcome is unknown. Never assume success or failure.                               |
-| `STALE`            | Local content changed after a remote memo was recorded or a publication was attempted.       |
-| `CONFLICT`         | A memo with this worklog ID exists with different content, or the expected memo disappeared. |
-| `BLOCKED`          | Reserved for an operator-blocked condition.                                                  |
+| State              | Meaning                                                                                                |
+| ------------------ | ------------------------------------------------------------------------------------------------------ |
+| `NOT_PUBLISHED`    | Saved locally and eligible for publication.                                                            |
+| `PUBLISHING`       | A create attempt was durably recorded before the remote call.                                          |
+| `PUBLISHED`        | A memo was read back and its ID and content hash matched.                                              |
+| `FAILED_RETRYABLE` | The write failed with a retryable error and a known not-applied outcome.                               |
+| `FAILED_PERMANENT` | The write failed permanently or the upstream rejected it.                                              |
+| `UNCERTAIN`        | The write outcome is unknown. Never assume success or failure.                                         |
+| `STALE`            | Local content changed after a remote memo was recorded or a publication was attempted.                 |
+| `CONFLICT`         | A memo with this worklog ID has different content, duplicates exist, or the expected memo disappeared. |
+| `BLOCKED`          | Reserved for an operator-blocked condition.                                                            |
 
 ### Uncertain writes
 
 A timeout does **not** mean the memo was not created.
 
 1. Do not call `publish_worklog` again.
-2. Call `retry_pending_sync` without `dryRun: false`. It lists memos in the configured calendar and
-   compares the stable worklog ID and content hash.
-3. If a matching memo exists, the state becomes `PUBLISHED` and no duplicate is created.
-4. If a memo with the same ID but a different hash exists, the state becomes `CONFLICT` and no
-   duplicate is created.
-5. If the listing itself fails, the state remains uncertain and no write is attempted.
-6. A live retry requires `dryRun: false`, `confirmation: "RETRY"`, writes enabled, and at most 10
-   work logs per call. `CONFLICT`, `FAILED_PERMANENT`, and blocked states are never retried by
-   `retry_pending_sync`. After fixing the cause of a `FAILED_PERMANENT` record, an explicit
-   `publish_worklog` with a matching preview may recover it; reconciliation still runs first.
+2. Call `retry_pending_sync` with its default dry-run mode. It lists memos in the configured
+   calendar and compares the stable worklog ID and content hash.
+3. If a matching memo exists, the verified result is recorded as `PUBLISHED` and no duplicate is
+   created.
+4. If a memo with the same ID but a different hash exists, the verified result is recorded as
+   `CONFLICT` and no duplicate is created.
+5. If the listing finds no memo, the dry run reports what a live retry would do but does not persist
+   the absence or a disappeared-memo conflict. Only a live retry persists the absence and may create
+   a memo from an uncertain or publishing attempt.
+6. If the listing itself fails, the state remains uncertain and no write is attempted.
+7. A live retry requires `dryRun: false`, `confirmation: "RETRY"`, writes enabled, and at most 10
+   work logs per call. `CONFLICT`, `FAILED_PERMANENT`, blocked states, and work logs that have never
+   been published (`NOT_PUBLISHED`) are never retried by `retry_pending_sync`; a first publication
+   must go through `publish_worklog` after preview. After fixing the cause of a `FAILED_PERMANENT`
+   record, an explicit `publish_worklog` with a matching preview may recover it; reconciliation still
+   runs first.
 
 Reconciliation uses the upstream memo listing. If the upstream service is eventually consistent,
 wait and reconcile again rather than creating a second memo.
@@ -356,6 +362,11 @@ and cleanup procedure is in
 - Email/password sign-in only; no OAuth or multi-account session management.
 - No attachments, checklists, attendees, reminders, or recurring memos.
 - No background scheduler; all actions are MCP calls.
+- Run one server process per data directory. Publication and retry calls are serialized within a
+  process, but cross-process coordination is outside this project.
+- Publication re-checks the local content hash after reconciliation and again after read-back. A
+  local save that lands during the remote request leaves the memo representing the previous
+  revision, and the state is marked `STALE` immediately.
 - Progress reports are limited to 366 calendar days per request.
 - Search uses SQLite FTS5 when available and falls back to `LIKE` otherwise.
 - There is no automatic reindex of the SQLite ledger from the Markdown archive after database loss.
