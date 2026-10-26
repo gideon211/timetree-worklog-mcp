@@ -3,16 +3,48 @@
 A local-first MCP server for daily work logs, completed work, progress reports, and optional
 TimeTree memo publication.
 
+- **Nine tools.** No delete, update, calendar-management, invite, or memo-deletion operations.
+- **Local-first.** The canonical record is Markdown on your machine. SQLite only indexes it.
+- **Safe by default.** Remote writes are disabled until you explicitly enable them.
+- **Verified writes.** Every remote create is read back and hash-checked before success is reported.
+
 The local Markdown archive is the canonical durable record. A transactional SQLite ledger indexes it
-for retrieval, search, revisions, and sync state. Every work log is saved
-locally before any remote operation. TimeTree synchronization is optional, disabled by default, and
-never treated as successful until the created memo has been read back and verified.
+for retrieval, search, revisions, and sync state. Every work log is saved locally before any remote
+operation. TimeTree synchronization is optional, disabled by default, and never treated as
+successful until the created memo has been read back and verified.
 
 > **Project status:** local storage, validation, reports, MCP transport, mock-provider
 > synchronization, reconciliation, and failure recovery are covered by automated tests. **Live
 > TimeTree integration has not been verified against an authorized account in this repository.**
 > Do not claim that live publication works until the gated procedure in
 > [docs/LIVE_TIMETREE_VERIFICATION.md](docs/LIVE_TIMETREE_VERIFICATION.md) has been completed.
+
+---
+
+## Table of contents
+
+- [Important TimeTree notice](#important-timetree-notice)
+- [Google sign-in accounts](#google-sign-in-accounts)
+- [What this server does](#what-this-server-does)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Quick start with the mock provider](#quick-start-with-the-mock-provider)
+- [Connecting your TimeTree account](#connecting-your-timetree-account)
+- [MCP client configuration](#mcp-client-configuration)
+- [Configuration reference](#configuration-reference)
+- [Tool reference](#tool-reference)
+- [Daily workflows](#daily-workflows)
+- [Local data model](#local-data-model)
+- [Synchronization states](#synchronization-states)
+- [Security and privacy](#security-and-privacy)
+- [Operations and deployment](#operations-and-deployment)
+- [Troubleshooting](#troubleshooting)
+- [Testing](#testing)
+- [Known limitations](#known-limitations)
+- [Documentation](#documentation)
+- [License](#license)
+
+---
 
 ## Important TimeTree notice
 
@@ -30,6 +62,35 @@ terms of service. Use a private calendar you control, keep remote writes disable
 reviewed the behavior, and never use the project to bypass authentication, CAPTCHA, access
 controls, or rate limits.
 
+## Google sign-in accounts
+
+**This adapter only supports email/password sign-in.** It authenticates with:
+
+```text
+PUT <TIMETREE_BASE_URL>/api/v1/auth/email/signin
+{ "uid": "<TIMETREE_EMAIL>", "password": "<TIMETREE_PASSWORD>" }
+```
+
+There is **no Google OAuth or social-login flow**. If your TimeTree account was created with
+"Continue with Google" and you have never set a separate TimeTree password, this server **cannot
+sign in to that account** as configured.
+
+What to check before going further:
+
+1. Open the TimeTree app or website and look in **Account / Settings** for an option to set or
+   change a password. Some accounts that originally used Google sign-in can also be given a
+   password. If TimeTree offers this, set one, then use your email plus that password here.
+2. If there is no way to set a password on a Google-linked account, this provider will not work for
+   that account. The local-only tools (`preview_daily_worklog`, `save_worklog`,
+   `get_daily_worklog`, `search_worklogs`, `generate_progress_report`, `get_sync_status`) still work
+   with no TimeTree account at all — only the remote read/write tools need credentials.
+3. TimeTree's behavior in this area is not documented and is outside this project's control. This
+   repository cannot grant, reset, or work around your TimeTree credentials.
+
+Always keep `TIMETREE_ENABLE_REMOTE_WRITES=false` until you have read the
+[security and privacy](#security-and-privacy) section and the
+[gated live verification procedure](docs/LIVE_TIMETREE_VERIFICATION.md).
+
 ## What this server does
 
 - Validates and normalizes a daily work log with strict Zod schemas.
@@ -41,9 +102,6 @@ controls, or rate limits.
   calendar**.
 - Reconciles before a retry, verifies every remote write by reading it back, and refuses to report
   remote success when the outcome is uncertain.
-
-There is no delete, update, calendar-management, invite, or memo-deletion tool. The project exposes
-exactly nine tools.
 
 ## Requirements
 
@@ -57,80 +115,137 @@ The exact dependency versions are locked. `package.json` also pins install-scrip
 
 The server uses stdio transport only. It does not open an HTTP port.
 
-## Quick start with the mock provider
-
-The mock provider is safe for local evaluation and does not contact TimeTree.
+## Installation
 
 ```bash
+git clone https://github.com/gideon211/timetree-worklog-mcp.git
+cd timetree-worklog-mcp
 npm ci
 npm run build
-npm test
 ```
 
-Use [examples/mock-mcp-config.json](examples/mock-mcp-config.json) as an MCP client configuration.
-The example points at an absolute `dist/index.js` path that you must replace with the real path on
-your machine. Then restart your MCP client and call `preview_daily_worklog` followed by
-`save_worklog`.
+Sanity checks:
+
+```bash
+npm test          # 91 tests
+npm run verify    # typecheck + lint + format + test + build
+npm audit         # dependency vulnerabilities
+```
 
 For development without a build:
 
 ```bash
-npm run dev
+npm run dev       # tsx src/index.ts
 ```
 
 The server speaks MCP over stdin/stdout. Diagnostic logs go to stderr and are redacted.
 
-## Optional TimeTree setup
+## Quick start with the mock provider
 
-1. Keep remote writes disabled:
+The mock provider is safe for local evaluation and does not contact TimeTree. Start here even if
+you intend to use TimeTree later.
 
-   ```text
-   TIMETREE_ENABLE_REMOTE_WRITES=false
-   ```
+1. Open [examples/mock-mcp-config.json](examples/mock-mcp-config.json) and replace the placeholder
+   path with the absolute path to `dist/index.js` on your machine.
+2. Paste the `mcpServers` block into your MCP client's configuration (see
+   [MCP client configuration](#mcp-client-configuration)).
+3. Restart your MCP client. It should now expose 9 tools.
+4. Call `preview_daily_worklog`, then `save_worklog`, then `generate_progress_report`.
 
-2. Put `TIMETREE_EMAIL` and `TIMETREE_PASSWORD` in the MCP client's environment, preferably
-   sourced from an OS credential store or a secret-injection facility. **Do not commit
-   credentials.** You do not need a calendar ID for the first step.
+Everything in this flow is local. No credentials are required and nothing is sent anywhere.
 
-3. Restart the MCP client and call `list_calendars`. This is a read-only call. It returns the
-   calendars visible to the account. Pick the **private** calendar that should receive work-log
-   memos. Do not configure a shared or public calendar.
+## Connecting your TimeTree account
 
-4. Set `TIMETREE_CALENDAR_ID` to that single calendar ID. Restart the client and call
-   `get_sync_status`. Check that `summary.health.status` is `ok` and that the calendar is
-   configured.
+> Read [Google sign-in accounts](#google-sign-in-accounts) first. Email/password sign-in is
+> required; Google-only accounts may not be usable.
 
-5. Remain in read-only mode until you are satisfied with the local preview and mock-provider
-   behavior. Remote publication requires an additional, explicit operator decision:
+### Step 1 — Start read-only
 
-   ```text
-   TIMETREE_ENABLE_REMOTE_WRITES=true
-   ```
+In your MCP client config, switch to the community provider. Keep writes disabled:
 
-6. Call `preview_daily_worklog`, inspect the Markdown and `remote` note, save the work log, then
-   call `publish_worklog` with the matching `previewHash` and `confirmation: "PUBLISH"`.
+```json
+"TIMETREE_PROVIDER": "community",
+"TIMETREE_EMAIL": "your-account@example.com",
+"TIMETREE_PASSWORD": "<from OS keychain or secret injection, never a committed file>",
+"TIMETREE_ENABLE_REMOTE_WRITES": "false"
+```
 
-The publish gate requires all of the following: remote writes enabled, a configured private
-calendar, a preview hash matching the current saved revision, no suspected secrets, and the literal
-confirmation `PUBLISH`. If the MCP client supports its own approval prompt, that remains an
-additional client-side control; the server does not rely on it.
+Restart the client and call **`list_calendars`**. This is read-only. It returns the calendars
+visible to your account.
+
+If sign-in fails with an authentication error, your email/password pair is wrong or the account
+cannot use email/password sign-in. Do not keep retrying in a loop; the provider backs off and opens
+a circuit breaker after repeated failures.
+
+### Step 2 — Choose a private calendar
+
+From `list_calendars`, pick a **private calendar you control**. Do not use a shared, family, team,
+or public calendar. Set that single ID in the config:
+
+```json
+"TIMETREE_CALENDAR_ID": "<chosen-private-calendar-id>"
+```
+
+Restart the client and call **`get_sync_status`**. Confirm `summary.health.status` is `ok` and the
+calendar is configured.
+
+### Step 3 — Preview and save locally
+
+Call `preview_daily_worklog`, inspect the rendered Markdown **and** the `remote` note payload, then
+call `save_worklog`. Keep the returned `previewHash`.
+
+### Step 4 — Enable writes and publish
+
+Only now flip the gate:
+
+```json
+"TIMETREE_ENABLE_REMOTE_WRITES": "true"
+```
+
+Call `publish_worklog` with the `previewHash` from the current saved revision and
+`confirmation: "PUBLISH"`.
+
+All of these must be true or the call refuses:
+
+- Remote writes are enabled.
+- A single private calendar is configured and exists for this account.
+- The preview hash matches the current saved revision.
+- No suspected secret patterns are detected in the content.
+- The confirmation literal is exactly `PUBLISH`.
+
+After creating the memo, the server reads it back, compares the stable work-log ID and the content
+hash, and only then reports `PUBLISHED`. If it cannot verify, it reports `UNCERTAIN` and never
+claims success.
+
+### Live verification before trusting it
+
+Because the endpoints are unofficial and unverified in this repo, run the gated procedure in
+[docs/LIVE_TIMETREE_VERIFICATION.md](docs/LIVE_TIMETREE_VERIFICATION.md) with a dedicated private
+test calendar and synthetic content before relying on live publication.
 
 ## MCP client configuration
 
-See:
+The server does **not** auto-load `.env` files. Configuration comes only from the environment block
+in the client config, or from exported shell variables. Use [.env.example](.env.example) as a
+variable reference.
+
+Client config locations (create or merge the `mcpServers` block):
+
+- **Claude Desktop:** `claude_desktop_config.json`
+- **Cursor / Windsurf / VS Code-style clients:** their `mcp.json` or equivalent
+- **Generic:** any client that launches an MCP server as a child process over stdio
+
+Examples:
 
 - [examples/mock-mcp-config.json](examples/mock-mcp-config.json) — safe local evaluation.
-- [examples/community-mcp-config.json](examples/community-mcp-config.json) — optional community
-  TimeTree provider, writes disabled.
-- [.env.example](.env.example) — environment variable reference. The server does **not** load
-  `.env` files automatically; use your MCP client's environment block or export the variables in
-  your shell.
+- [examples/community-mcp-config.json](examples/community-mcp-config.json) — community provider,
+  writes disabled.
 
 MCP client configurations commonly store secrets as plaintext. If your client supports environment
-injection, OS keychain integration, or a secret manager, use it instead of putting a password
+injection, OS keychain integration, or a secret manager, use that instead of putting a password
 directly in a checked-in JSON file.
 
-## Configuration
+## Configuration reference
 
 | Variable                        | Default                             | Purpose                                                                |
 | ------------------------------- | ----------------------------------- | ---------------------------------------------------------------------- |
@@ -161,7 +276,7 @@ Default data directories:
 The application creates directories with best-effort `0700` permissions and files with `0600`
 where the platform supports POSIX permissions.
 
-## Tools
+## Tool reference
 
 The MCP surface is deliberately limited to these nine tools.
 
@@ -181,20 +296,36 @@ Every successful tool response uses an `{ "ok": true, "data": ... }` envelope. F
 `{ "ok": false, "error": { "code", "message", "retryable", "details?" } }` and the MCP `isError`
 flag. Unknown arguments are rejected at the schema boundary.
 
-### Recommended workflow
+## Daily workflows
 
-1. Call `preview_daily_worklog` with the facts the user actually supplied. Do not invent dates,
+### Record a day's work
+
+1. `preview_daily_worklog` — supply the facts the user actually provided. Do not invent dates,
    deadlines, completed work, decisions, or evidence.
 2. Inspect the rendered Markdown, the remote note, and any secret warnings.
-3. Call `save_worklog`. Review the returned `previewHash` if you want to publish later.
-4. Call `publish_worklog` only after the operator has authorized the remote write. The
-   `previewHash` must match the currently saved revision.
-5. Use `get_sync_status` to inspect attempts and verification state.
-6. If the work log is edited after publication, the state becomes `STALE`. Republishing is blocked
-   as a `CONFLICT` because this server intentionally has no destructive update operation. Resolve the
-   remote memo manually if necessary. A `publish_worklog` call then reconciles without creating a
-   memo and clears the conflict if the recorded memo is gone. Inspect the calendar and call
-   `publish_worklog` again only if a new memo is intended.
+3. `save_worklog` — writes the local record. Keep the `previewHash` if you may publish later.
+4. `get_daily_worklog` — verify the saved revision when needed.
+5. `generate_progress_report` — build an attributed report over a date range (max 366 days).
+
+### Publish to TimeTree
+
+1. `preview_daily_worklog` — inspect the `remote` payload.
+2. `save_worklog` — ensure the revision matches the preview.
+3. `publish_worklog` — pass the matching `previewHash` and `confirmation: "PUBLISH"`.
+
+### Check and repair synchronization
+
+1. `get_sync_status` — inspect counts, per-log state, attempts, and provider health.
+2. `retry_pending_sync` — defaults to a dry run that only lists what would happen.
+3. For a live retry, set `dryRun: false` and `confirmation: "RETRY"` (max 10 logs per call).
+
+### After editing a published log
+
+If the work log is edited after publication, the state becomes `STALE`. Republishing is blocked as a
+`CONFLICT` because this server intentionally has no destructive update operation. Resolve the remote
+memo manually if necessary. A `publish_worklog` call then reconciles without creating a memo and
+clears the conflict if the recorded memo is gone. Inspect the calendar and call `publish_worklog`
+again only if a new memo is intended.
 
 ## Local data model
 
@@ -272,7 +403,7 @@ A timeout does **not** mean the memo was not created.
 
 1. Do not call `publish_worklog` again.
 2. Call `retry_pending_sync` with its default dry-run mode. It lists memos in the configured
-   calendar and compares the stable worklog ID and content hash.
+   calendar and compares the stable work-log ID and content hash.
 3. If a matching memo exists, the verified result is recorded as `PUBLISHED` and no duplicate is
    created.
 4. If a memo with the same ID but a different hash exists, the verified result is recorded as
@@ -290,6 +421,99 @@ A timeout does **not** mean the memo was not created.
 
 Reconciliation uses the upstream memo listing. If the upstream service is eventually consistent,
 wait and reconcile again rather than creating a second memo.
+
+## Security and privacy
+
+- Remote writes are disabled by default; credentials are required only for the optional community
+  provider and are read only from the process environment. No credentials are written to the
+  archive, database, or logs.
+- Session cookies and CSRF tokens are held in memory for the provider instance only.
+- Diagnostic logs go to stderr and pass through a redacting logger. Secret-like values and
+  credential fields are redacted.
+- Work-log content is scanned for common credential patterns. Publication is blocked if a
+  suspected secret is detected, but this is a safety net, not a guarantee.
+- Only the configured calendar ID is accepted. A different calendar ID is rejected before a write.
+- Remote note size and upstream response size are bounded.
+- Read requests use bounded retries and exponential backoff. Writes are not retried after transport,
+  timeout, server, or schema failures. A write may be replayed once after a 401/403
+  authentication/session rejection, which is treated as not applied; other retries are explicit and
+  reconciled.
+- A circuit breaker opens after repeated upstream failures.
+- The project does not bypass authentication, CAPTCHA, access controls, or rate limits.
+- No HTTP listener is opened. MCP is stdio only.
+- Back up the data directory, protect it with OS permissions, and avoid syncing it to an
+  untrusted location.
+
+## Operations and deployment
+
+### Running as a service
+
+The server is a stdio child process, not a daemon. It runs under whatever MCP client launches it.
+To run it yourself for debugging:
+
+```bash
+npm start              # node dist/index.js
+```
+
+It will block on stdin waiting for MCP messages. Logs go to stderr.
+
+### Backups
+
+Back up the **entire data directory**, which contains the Markdown archive, the SQLite database, and
+generated reports. The Markdown files are the durable record; the database is an index and ledger.
+There is no automatic reindex from Markdown after database loss, so losing the database without a
+backup means losing search, revision history, and sync state even though the Markdown files survive.
+
+### Upgrades
+
+```bash
+git pull
+npm ci
+npm run verify
+npm run build
+```
+
+Review the dependency lockfile diff and the `allowScripts` pins before accepting upgrades.
+
+### One process per data directory
+
+Publication and retry calls are serialized within one process. Multiple server processes sharing a
+database are not coordinated. Run one instance per data directory.
+
+## Troubleshooting
+
+**Sign-in fails with an authentication error.**
+Your email/password pair is wrong, or the account cannot use email/password sign-in (for example, a
+Google-only account). See [Google sign-in accounts](#google-sign-in-accounts). The adapter backs off
+and opens a circuit breaker after repeated failures, so do not retry in a loop.
+
+**Sign-in fails with a permission or 403 error.**
+TimeTree blocked the sign-in. Do not attempt to bypass it. This project will not circumvent access
+controls, CAPTCHA, or rate limits.
+
+**`list_calendars` fails but local tools work.**
+Expected when credentials are missing or wrong. All local tools work with no TimeTree account. Only
+the remote read/write tools need credentials.
+
+**`publish_worklog` returns `PREVIEW_REQUIRED`.**
+The saved revision changed after you previewed it, or it changed while publication was being
+prepared. Run `preview_daily_worklog` again, review, save, and use the new hash.
+
+**A publish returned `UNCERTAIN`.**
+Do not publish again. Follow [Uncertain writes](#uncertain-writes). The server reconciles before any
+retry so it never creates a duplicate.
+
+**`get_sync_status` shows `CONFLICT`.**
+A remote memo exists with different content, duplicates exist, or the expected memo disappeared.
+Resolve it manually in the calendar, then use an explicit `publish_worklog` to reconcile and clear.
+
+**The remote note is truncated.**
+Only the body is truncated, and only when it exceeds `TIMETREE_REMOTE_MAX_CHARS`. The metadata header
+is always retained. The local archive is never truncated.
+
+**Server does not appear in the MCP client.**
+Confirm the `command` is `node` and `args[0]` is the absolute path to `dist/index.js`, then restart
+the client. Check that `npm run build` has been run so `dist/index.js` exists.
 
 ## Testing
 
@@ -330,36 +554,15 @@ cookie, CSRF token, or note contents. Add `-- --include-memos` and set
 and cleanup procedure is in
 [docs/LIVE_TIMETREE_VERIFICATION.md](docs/LIVE_TIMETREE_VERIFICATION.md).
 
-## Security and privacy
-
-- Remote writes are disabled by default; credentials are required only for the optional community
-  provider and are read only from the process environment. No credentials are written to the
-  archive, database, or logs.
-- Session cookies and CSRF tokens are held in memory for the provider instance only.
-- Diagnostic logs go to stderr and pass through a redacting logger. Secret-like values and
-  credential fields are redacted.
-- Work-log content is scanned for common credential patterns. Publication is blocked if a
-  suspected secret is detected, but this is a safety net, not a guarantee.
-- Only the configured calendar ID is accepted. A different calendar ID is rejected before a write.
-- Remote note size and upstream response size are bounded.
-- Read requests use bounded retries and exponential backoff. Writes are not retried after transport,
-  timeout, server, or schema failures. A write may be replayed once after a 401/403
-  authentication/session rejection, which is treated as not applied; other retries are explicit and
-  reconciled.
-- A circuit breaker opens after repeated upstream failures.
-- The project does not bypass authentication, CAPTCHA, access controls, or rate limits.
-- No HTTP listener is opened. MCP is stdio only.
-- Back up the data directory, protect it with OS permissions, and avoid syncing it to an
-  untrusted location.
-
 ## Known limitations
 
 - Live TimeTree publication is unverified in this repository.
 - The TimeTree community endpoints are unofficial and can change or stop working.
+- **Email/password sign-in only.** No Google OAuth, social login, or multi-account session
+  management. Google-only accounts may not be usable.
 - No memo update or delete operation is exposed. Editing a published work log results in `STALE`
   and then `CONFLICT` rather than a remote update.
 - One configured calendar per server instance.
-- Email/password sign-in only; no OAuth or multi-account session management.
 - No attachments, checklists, attendees, reminders, or recurring memos.
 - No background scheduler; all actions are MCP calls.
 - Run one server process per data directory. Publication and retry calls are serialized within a
